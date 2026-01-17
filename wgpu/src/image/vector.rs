@@ -8,6 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::panic;
 use std::sync::Arc;
+use std::collections::hash_map;
 
 /// Entry in cache corresponding to an svg handle
 pub enum Svg {
@@ -47,43 +48,38 @@ type ColorFilter = Option<[u8; 4]>;
 impl Cache {
     /// Load svg
     pub fn load(&mut self, handle: &svg::Handle) -> &Svg {
-        if self.svgs.contains_key(&handle.id()) {
-            return self.svgs.get(&handle.id()).unwrap();
+        let id = handle.id();
+        match self.svgs.entry(id) {
+            hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            hash_map::Entry::Vacant(entry) => {
+                // TODO: Reuse `cosmic-text` font database
+                let fontdb = self.fontdb.get_or_insert_with(|| {
+                    let mut fontdb = usvg::fontdb::Database::new();
+                    fontdb.load_system_fonts();
+                    Arc::new(fontdb)
+                });
+
+                let options = usvg::Options {
+                    fontdb: fontdb.clone(),
+                    ..usvg::Options::default()
+                };
+
+                let svg = match handle.data() {
+                    svg::Data::Path(path) => fs::read_to_string(path)
+                        .ok()
+                        .and_then(|contents| usvg::Tree::from_str(&contents, &options).ok())
+                        .map(Svg::Loaded)
+                        .unwrap_or(Svg::NotFound),
+                    svg::Data::Bytes(bytes) => match usvg::Tree::from_data(bytes, &options) {
+                        Ok(tree) => Svg::Loaded(tree),
+                        Err(_) => Svg::NotFound,
+                    },
+                };
+
+                self.should_trim = true;
+                entry.insert(svg)
+            }
         }
-
-        // TODO: Reuse `cosmic-text` font database
-        if self.fontdb.is_none() {
-            let mut fontdb = usvg::fontdb::Database::new();
-            fontdb.load_system_fonts();
-
-            self.fontdb = Some(Arc::new(fontdb));
-        }
-
-        let options = usvg::Options {
-            fontdb: self
-                .fontdb
-                .as_ref()
-                .expect("fontdb must be initialized")
-                .clone(),
-            ..usvg::Options::default()
-        };
-
-        let svg = match handle.data() {
-            svg::Data::Path(path) => fs::read_to_string(path)
-                .ok()
-                .and_then(|contents| usvg::Tree::from_str(&contents, &options).ok())
-                .map(Svg::Loaded)
-                .unwrap_or(Svg::NotFound),
-            svg::Data::Bytes(bytes) => match usvg::Tree::from_data(bytes, &options) {
-                Ok(tree) => Svg::Loaded(tree),
-                Err(_) => Svg::NotFound,
-            },
-        };
-
-        self.should_trim = true;
-
-        let _ = self.svgs.insert(handle.id(), svg);
-        self.svgs.get(&handle.id()).unwrap()
     }
 
     /// Load svg and upload raster data
