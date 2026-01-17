@@ -239,8 +239,10 @@ impl Cache {
             }
         }
 
-        if !self.raster.pending.contains_key(&handle.id()) {
-            let _ = self.raster.pending.insert(handle.id(), Vec::new());
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.raster.pending.entry(handle.id())
+        {
+            let _ = entry.insert(Vec::new());
 
             #[cfg(not(target_arch = "wasm32"))]
             self.worker.upload(handle, image);
@@ -377,8 +379,9 @@ fn load_image<'a>(
         } else if let core::image::Handle::Rgba { .. } = handle {
             // Load RGBA handles synchronously, since it's very cheap
             cache.insert(handle, Memory::load(handle));
-        } else if !pending.contains_key(&handle.id()) {
-            let _ = pending.insert(handle.id(), Vec::from_iter(callback));
+        } else if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(handle.id())
+        {
+            let _ = entry.insert(Vec::from_iter(callback));
 
             #[cfg(not(target_arch = "wasm32"))]
             worker.load(handle, false);
