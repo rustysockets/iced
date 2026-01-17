@@ -42,7 +42,7 @@ use crate::core::renderer;
 use crate::core::theme;
 use crate::core::time::Instant;
 use crate::core::widget::operation;
-use crate::core::{Point, Renderer, Size};
+use crate::core::{Point, Size};
 use crate::futures::futures::channel::mpsc;
 use crate::futures::futures::channel::oneshot;
 use crate::futures::futures::task;
@@ -600,12 +600,19 @@ async fn run_instance<P>(
                     #[cfg(not(target_arch = "wasm32"))]
                     runtime.block_on(create_compositor);
 
-                    match compositor_receiver.await.expect("Wait for compositor") {
-                        Ok(new_compositor) => {
+                    match compositor_receiver.await {
+                        Ok(Ok(new_compositor)) => {
                             compositor = Some(new_compositor);
                         }
-                        Err(error) => {
+                        Ok(Err(error)) => {
                             let _ = control_sender.start_send(Control::Crash(error.into()));
+                            continue;
+                        }
+                        Err(_canceled) => {
+                            // Sender dropped before producing a compositor (e.g. shutdown/teardown).
+                            // Avoid panicking; exit gracefully.
+                            log::warn!("iced_winit: compositor initialization canceled");
+                            let _ = control_sender.start_send(Control::Exit);
                             continue;
                         }
                     }
