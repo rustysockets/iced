@@ -96,11 +96,12 @@ impl Cache {
     ) -> Result<core::image::Allocation, core::image::Error> {
         use crate::image::raster::Memory;
 
-        if !self.raster.cache.contains(handle) {
-            self.raster.cache.insert(handle, Memory::load(handle));
-        }
+        let memory = self
+            .raster
+            .cache
+            .get_or_insert_with(handle, Memory::load);
 
-        match self.raster.cache.get_mut(handle).unwrap() {
+        match memory {
             Memory::Host(image) => {
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("raster image upload"),
@@ -370,22 +371,25 @@ fn load_image<'a>(
 ) -> Option<&'a mut crate::image::raster::Memory> {
     use crate::image::raster::Memory;
 
-    if !cache.contains(handle) {
-        if cfg!(target_arch = "wasm32") {
-            // TODO: Concurrent support for Wasm
-            cache.insert(handle, Memory::load(handle));
-        } else if let core::image::Handle::Rgba { .. } = handle {
-            // Load RGBA handles synchronously, since it's very cheap
-            cache.insert(handle, Memory::load(handle));
-        } else if !pending.contains_key(&handle.id()) {
-            let _ = pending.insert(handle.id(), Vec::from_iter(callback));
+    let memory = cache.get_or_insert_with(handle, Memory::load);
 
-            #[cfg(not(target_arch = "wasm32"))]
-            worker.load(handle, false);
-        }
+    if matches!(memory, Memory::Host(_) | Memory::Error(_))
+        || matches!(handle, core::image::Handle::Rgba { .. })
+        || cfg!(target_arch = "wasm32")
+    {
+        // Already loaded synchronously, or concurrent loading is unavailable in this environment.
+        // TODO: Concurrent support for Wasm
+        return Some(memory);
     }
 
-    cache.get_mut(handle)
+    if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(handle.id()) {
+        let _ = entry.insert(Vec::from_iter(callback));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        worker.load(handle, false);
+    }
+
+    Some(memory)
 }
 
 #[cfg(all(feature = "image", not(target_arch = "wasm32")))]

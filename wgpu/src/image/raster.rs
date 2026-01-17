@@ -4,6 +4,7 @@ use crate::graphics;
 use crate::image::atlas::{self, Atlas};
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::hash_map;
 use std::sync::{Arc, Weak};
 
 pub type Image = graphics::image::Buffer;
@@ -59,20 +60,35 @@ pub struct Cache {
 
 impl Cache {
     pub fn get_mut(&mut self, handle: &image::Handle) -> Option<&mut Memory> {
-        let _ = self.hits.insert(handle.id());
+        let id = handle.id();
+        let _ = self.hits.insert(id);
 
-        self.map.get_mut(&handle.id())
+        self.map.get_mut(&id)
     }
 
     pub fn insert(&mut self, handle: &image::Handle, memory: Memory) {
-        let _ = self.map.insert(handle.id(), memory);
-        let _ = self.hits.insert(handle.id());
+        let id = handle.id();
+        let _ = self.map.insert(id, memory);
+        let _ = self.hits.insert(id);
 
         self.should_trim = true;
     }
 
-    pub fn contains(&self, handle: &image::Handle) -> bool {
-        self.map.contains_key(&handle.id())
+    pub fn get_or_insert_with(
+        &mut self,
+        handle: &image::Handle,
+        insert: impl FnOnce(&image::Handle) -> Memory,
+    ) -> &mut Memory {
+        let id = handle.id();
+        let _ = self.hits.insert(id);
+
+        match self.map.entry(id) {
+            hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            hash_map::Entry::Vacant(entry) => {
+                self.should_trim = true;
+                entry.insert(insert(handle))
+            }
+        }
     }
 
     pub fn trim(&mut self, atlas: &mut Atlas, on_drop: impl Fn(Arc<wgpu::BindGroup>)) {
